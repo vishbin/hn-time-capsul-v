@@ -21,6 +21,8 @@ from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 
+import requests
+
 
 # -----------------------------------------------------------------------------
 # Data structures
@@ -197,20 +199,21 @@ class ArticleTextParser(HTMLParser):
 # -----------------------------------------------------------------------------
 
 def fetch_url(url: str, retries: int = 3, timeout: int = 15) -> str:
-    """Fetch URL content with retry logic."""
+    """Fetch URL content with retry logic. Uses requests library to avoid TLS fingerprint blocking."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
-    req = urllib.request.Request(url, headers=headers)
     for attempt in range(retries):
         try:
             if attempt > 0:
                 time.sleep(2 ** attempt)
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
-            if e.code == 403 and attempt < retries - 1:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            return response.text
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403 and attempt < retries - 1:
                 continue
             raise
     raise Exception(f"Failed to fetch {url} after {retries} retries")
@@ -886,18 +889,34 @@ def stage_render(target_date: str, update_index: bool = True):
         .article-item .score-box {{ width: 36px; height: 36px; border-radius: 6px; display: flex;
                                    align-items: center; justify-content: center; font-weight: bold;
                                    font-size: 0.85em; flex-shrink: 0; }}
-        .article-item .score-box.score-high {{ background: #ff6600; color: white; }}
-        .article-item .score-box.score-medium {{ background: #ffcc00; color: #333; }}
-        .article-item .score-box.score-low {{ background: #ddd; color: #666; }}
+        .article-item .score-box.score-10 {{ background: #c2410c; color: white; }}
+        .article-item .score-box.score-9 {{ background: #ea580c; color: white; }}
+        .article-item .score-box.score-8 {{ background: #f97316; color: white; }}
+        .article-item .score-box.score-7 {{ background: #fb923c; color: #333; }}
+        .article-item .score-box.score-6 {{ background: #fdba74; color: #333; }}
+        .article-item .score-box.score-5 {{ background: #fed7aa; color: #333; }}
+        .article-item .score-box.score-4 {{ background: #e5e7eb; color: #666; }}
+        .article-item .score-box.score-3 {{ background: #d1d5db; color: #666; }}
+        .article-item .score-box.score-2 {{ background: #9ca3af; color: white; }}
+        .article-item .score-box.score-1 {{ background: #6b7280; color: white; }}
+        .article-item .score-box.score-0 {{ background: #4b5563; color: white; }}
         .article-item .score-box.score-none {{ background: #eee; color: #999; font-size: 0.7em; }}
         .article-item .content {{ flex: 1; min-width: 0; }}
         .article-item .title {{ font-size: 0.9em; font-weight: 500; margin-bottom: 4px; color: #333; }}
         .article-item .meta {{ font-size: 0.75em; color: #888; }}
         .score {{ display: inline-block; padding: 2px 6px; border-radius: 10px; font-weight: bold;
                  font-size: 0.7em; margin-left: 6px; vertical-align: middle; }}
-        .score-high {{ background: #ff6600; color: white; }}
-        .score-medium {{ background: #ffcc00; color: #333; }}
-        .score-low {{ background: #ddd; color: #666; }}
+        .score.score-10 {{ background: #c2410c; color: white; }}
+        .score.score-9 {{ background: #ea580c; color: white; }}
+        .score.score-8 {{ background: #f97316; color: white; }}
+        .score.score-7 {{ background: #fb923c; color: #333; }}
+        .score.score-6 {{ background: #fdba74; color: #333; }}
+        .score.score-5 {{ background: #fed7aa; color: #333; }}
+        .score.score-4 {{ background: #e5e7eb; color: #666; }}
+        .score.score-3 {{ background: #d1d5db; color: #666; }}
+        .score.score-2 {{ background: #9ca3af; color: white; }}
+        .score.score-1 {{ background: #6b7280; color: white; }}
+        .score.score-0 {{ background: #4b5563; color: white; }}
 
         /* Main content */
         .main {{ flex: 1; overflow-y: auto; padding: 30px 40px; background: #fff; }}
@@ -906,7 +925,7 @@ def stage_render(target_date: str, update_index: bool = True):
         .main .article-meta {{ color: #666; font-size: 0.9em; margin-bottom: 20px; padding-bottom: 15px;
                               border-bottom: 1px solid #eee; }}
         .main .article-meta a {{ color: #0066cc; }}
-        .analysis {{ font-size: 0.95em; white-space: pre-wrap; line-height: 1.7; }}
+        .analysis {{ font-size: 0.95em; line-height: 1.5; }}
         .grades-section {{ background: #f9f9f9; padding: 15px; border-radius: 6px; margin-top: 20px; }}
         .grade {{ display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 3px; font-size: 0.8em; }}
         .grade-a {{ background: #c6efce; color: #006100; }}
@@ -918,7 +937,23 @@ def stage_render(target_date: str, update_index: bool = True):
         .prompt-content {{ white-space: pre-wrap; font-size: 0.85em; background: #f5f5f5;
                           padding: 15px; border-radius: 4px; margin-top: 10px; max-height: 400px; overflow-y: auto; }}
         .placeholder {{ color: #999; text-align: center; margin-top: 100px; }}
+
+        /* Markdown content styling */
+        .analysis h1, .analysis h2, .analysis h3 {{ margin-top: 1.2em; margin-bottom: 0.4em; color: #333; }}
+        .analysis h1 {{ font-size: 1.3em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }}
+        .analysis h2 {{ font-size: 1.15em; }}
+        .analysis h3 {{ font-size: 1.05em; }}
+        .analysis p {{ margin: 0.6em 0; }}
+        .analysis ul, .analysis ol {{ margin: 0.6em 0; padding-left: 1.5em; }}
+        .analysis li {{ margin: 0.25em 0; }}
+        .analysis strong {{ color: #333; }}
+        .analysis blockquote {{ border-left: 3px solid #ff6600; margin: 0.8em 0; padding-left: 1em; color: #555; }}
+        .analysis code {{ background: #f5f5f5; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }}
+        .analysis pre {{ background: #f5f5f5; padding: 0.8em; border-radius: 4px; overflow-x: auto; margin: 0.6em 0; }}
+        .analysis pre code {{ background: none; padding: 0; }}
+        .analysis hr {{ border: none; border-top: 1px solid #eee; margin: 1em 0; }}
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -937,7 +972,7 @@ def stage_render(target_date: str, update_index: bool = True):
         article = data["article"]
         score = data["score"]
         if score is not None:
-            score_class = "score-high" if score >= 7 else "score-medium" if score >= 4 else "score-low"
+            score_class = f"score-{score}"
             score_box = f'<div class="score-box {score_class}">{score}</div>'
         else:
             score_box = '<div class="score-box score-none">--</div>'
@@ -962,6 +997,16 @@ def stage_render(target_date: str, update_index: bool = True):
     </div>
 
     <script>
+    // Configure marked for tighter output
+    marked.setOptions({ breaks: false, gfm: true });
+
+    // Preprocess markdown to remove excessive whitespace
+    function cleanMarkdown(md) {
+        return md
+            .replace(/  +$/gm, '')
+            .replace(/\\n\\n\\n+/g, '\\n\\n');
+    }
+
     const articles = [""")
 
     # JavaScript data
@@ -1022,7 +1067,7 @@ def stage_render(target_date: str, update_index: bool = True):
 
         const a = articles[idx];
         const scoreHtml = a.score !== null ?
-            `<span class="score score-${a.score >= 7 ? 'high' : a.score >= 4 ? 'medium' : 'low'}">${a.score}/10</span>` : '';
+            `<span class="score score-${a.score}">${a.score}/10</span>` : '';
 
         document.getElementById('main-content').innerHTML = `
             <h1>${a.title}${scoreHtml}</h1>
@@ -1032,7 +1077,7 @@ def stage_render(target_date: str, update_index: bool = True):
                 <a href="${a.hn_url}" target="_blank">HN Discussion</a>
             </div>
             ${a.grades ? `<div class="grades-section"><strong>Grades:</strong> ${a.grades}</div>` : ''}
-            <div class="analysis">${a.response || '<em>No analysis available</em>'}</div>
+            <div class="analysis">${a.response ? marked.parse(cleanMarkdown(a.response)) : '<em>No analysis available</em>'}</div>
             ${a.prompt ? `<details class="prompt-section"><summary>View LLM prompt</summary><div class="prompt-content">${a.prompt}</div></details>` : ''}
         `;
 
