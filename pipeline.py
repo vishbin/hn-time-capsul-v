@@ -400,8 +400,11 @@ def generate_prompt(article: Article, article_text: str, article_error: str | No
 # Grade parsing
 # -----------------------------------------------------------------------------
 
-def parse_grades(text: str) -> dict[str, str]:
-    """Parse the Final grades section from LLM output."""
+def parse_grades(text: str) -> dict[str, dict]:
+    """Parse the Final grades section from LLM output.
+
+    Returns dict of username -> {"grade": "A", "rationale": "explanation..."}
+    """
     grades = {}
     # Match "Final grades" with optional leading section number, #, or other prefixes
     pattern = r'(?:^|\n)(?:\d+[\.\)]\s*)?(?:#+ *)?Final grades\s*\n'
@@ -410,7 +413,10 @@ def parse_grades(text: str) -> dict[str, str]:
         return grades
 
     grades_section = text[match.end():]
-    line_pattern = r'^[\-\*]\s*([^:]+):\s*([A-F][+-]?)'
+    # Pattern: - username: GRADE (rationale text)
+    # Also handle: - username (qualifier): GRADE (rationale)
+    # Note: handle both ASCII +/- and Unicode minus (−)
+    line_pattern = r'^[\-\*]\s*([^:]+):\s*([A-F][+\-−]?)(?:\s*\(([^)]+)\))?'
 
     for line in grades_section.split('\n'):
         line = line.strip()
@@ -420,7 +426,10 @@ def parse_grades(text: str) -> dict[str, str]:
             break
         m = re.match(line_pattern, line)
         if m:
-            grades[m.group(1).strip()] = m.group(2).strip()
+            username = m.group(1).strip()
+            grade = m.group(2).strip()
+            rationale = m.group(3).strip() if m.group(3) else ""
+            grades[username] = {"grade": grade, "rationale": rationale}
 
     return grades
 
@@ -434,7 +443,7 @@ def grade_to_numeric(grade: str) -> float:
     if len(grade) > 1:
         if grade[1] == '+':
             value += 0.3
-        elif grade[1] == '-':
+        elif grade[1] in '-−':  # ASCII minus and Unicode minus
             value -= 0.3
     return value
 
@@ -639,7 +648,7 @@ def stage_analyze(target_date: str, model: str = "gpt-5.1", max_workers: int = 5
 def stage_parse(target_date: str):
     """Stage 4: Parse grades from all responses."""
     data_dir = get_data_dir(target_date)
-    all_grades = {}  # username -> list of (grade, article_id)
+    all_grades = {}  # username -> list of {grade, rationale, article}
 
     for article_dir in sorted(data_dir.iterdir()):
         if not article_dir.is_dir():
@@ -653,7 +662,7 @@ def stage_parse(target_date: str):
             continue
 
         response = response_file.read_text()
-        grades = parse_grades(response)
+        grades = parse_grades(response)  # Now returns {username: {grade, rationale}}
         score = parse_interestingness_score(response)
 
         with open(grades_file, 'w') as f:
@@ -663,10 +672,14 @@ def stage_parse(target_date: str):
             json.dump({"interestingness": score}, f, indent=2)
 
         item_id = article_dir.name
-        for username, grade in grades.items():
+        for username, grade_info in grades.items():
             if username not in all_grades:
                 all_grades[username] = []
-            all_grades[username].append({"grade": grade, "article": item_id})
+            all_grades[username].append({
+                "grade": grade_info["grade"],
+                "rationale": grade_info["rationale"],
+                "article": item_id
+            })
 
         score_str = f", score={score}" if score is not None else ""
         print(f"Parsed {len(grades)} grades from {item_id}{score_str}")
@@ -931,7 +944,7 @@ def stage_render(target_date: str, update_index: bool = True):
 
         selected = "selected" if i == 0 else ""
         html_parts.append(f"""
-            <div class="article-item {selected}" onclick="selectArticle({i})">
+            <div class="article-item {selected}" id="article-{article.item_id}" onclick="selectArticle({i})">
                 {score_box}
                 <div class="content">
                     <div class="title">{article.rank}. {html.escape(article.title)}</div>
@@ -962,8 +975,17 @@ def stage_render(target_date: str, update_index: bool = True):
         # Build grades HTML
         grade_html = ""
         if grades:
-            sorted_grades = sorted(grades.items(), key=lambda x: -grade_to_numeric(x[1]))
-            for username, grade in sorted_grades[:20]:
+            # Handle both old format (username: "grade") and new format (username: {grade, rationale})
+            def get_grade(item):
+                val = item[1]
+                if isinstance(val, dict):
+                    return val.get("grade", "")
+                return val
+            sorted_grades = sorted(grades.items(), key=lambda x: -grade_to_numeric(get_grade(x)))
+            for username, grade_info in sorted_grades[:20]:
+                grade = get_grade((username, grade_info))
+                if not grade:
+                    continue
                 grade_class = f"grade-{grade[0].lower()}"
                 grade_html += f'<span class="grade {grade_class}">{html.escape(username)}: {grade}</span> '
 
@@ -977,6 +999,7 @@ def stage_render(target_date: str, update_index: bool = True):
 
         html_parts.append(f"""
         {{
+            id: "{article.item_id}",
             title: {title_js},
             url: {url_js},
             hn_url: {hn_url_js},
@@ -991,7 +1014,7 @@ def stage_render(target_date: str, update_index: bool = True):
     html_parts.append("""
     ];
 
-    function selectArticle(idx) {
+    function selectArticle(idx, updateHash = true) {
         // Update sidebar selection
         document.querySelectorAll('.article-item').forEach((el, i) => {
             el.classList.toggle('selected', i === idx);
@@ -1012,10 +1035,40 @@ def stage_render(target_date: str, update_index: bool = True):
             <div class="analysis">${a.response || '<em>No analysis available</em>'}</div>
             ${a.prompt ? `<details class="prompt-section"><summary>View LLM prompt</summary><div class="prompt-content">${a.prompt}</div></details>` : ''}
         `;
+
+        // Update URL hash without scrolling
+        if (updateHash) {
+            history.replaceState(null, '', '#article-' + a.id);
+        }
     }
 
-    // Select first article on load
-    if (articles.length > 0) selectArticle(0);
+    function selectArticleById(id) {
+        const idx = articles.findIndex(a => a.id === id);
+        if (idx >= 0) {
+            selectArticle(idx, false);
+            // Scroll sidebar item into view
+            document.getElementById('article-' + id)?.scrollIntoView({block: 'nearest'});
+        }
+    }
+
+    // Handle initial load and hash changes
+    function handleHash() {
+        const hash = window.location.hash;
+        if (hash.startsWith('#article-')) {
+            const id = hash.substring(9);  // Remove '#article-'
+            selectArticleById(id);
+            return true;
+        }
+        return false;
+    }
+
+    // On load: check for hash, otherwise select first
+    if (!handleHash() && articles.length > 0) {
+        selectArticle(0);
+    }
+
+    // Handle hash changes (e.g., back/forward navigation)
+    window.addEventListener('hashchange', handleHash);
     </script>
 </body>
 </html>""")
@@ -1064,6 +1117,12 @@ def stage_render_index():
                max-width: 800px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
         h1 { color: #ff6600; }
         .intro { color: #666; margin-bottom: 30px; }
+        .hall-of-fame-link { display: inline-block; margin-bottom: 30px; padding: 12px 24px;
+                            background: linear-gradient(135deg, #fbbf24, #f59e0b); color: white;
+                            text-decoration: none; border-radius: 8px; font-weight: 600;
+                            transition: transform 0.15s, box-shadow 0.15s; }
+        .hall-of-fame-link:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(251, 191, 36, 0.4); }
+        h2 { color: #333; margin-top: 40px; margin-bottom: 20px; font-size: 1.2em; }
         .date-list { list-style: none; padding: 0; }
         .date-list li { margin-bottom: 10px; }
         .date-list a { display: block; padding: 15px 20px; background: #f5f5f5; border-radius: 6px;
@@ -1080,6 +1139,8 @@ def stage_render_index():
         Revisiting Hacker News frontpages from 10 years ago, with the benefit of hindsight.
         Each day's articles are analyzed by an LLM to see what predictions came true and which commenters were most prescient.
     </p>
+    <a href="hall-of-fame.html" class="hall-of-fame-link">Hall of Fame</a>
+    <h2>Browse by Date</h2>
     <ul class="date-list">
 """
 
@@ -1101,6 +1162,247 @@ def stage_render_index():
         f.write(html)
 
     print(f"Rendered index to {output_file} ({len(all_dates)} dates)")
+
+    # Also render the Hall of Fame
+    stage_render_hall_of_fame()
+
+
+def stage_render_hall_of_fame():
+    """Render the Hall of Fame page aggregating all user grades across all dates."""
+    output_base = get_output_dir()
+    data_base = Path("data")
+
+    # Collect all grades from all dates
+    all_user_grades = {}  # username -> list of {grade, rationale, article, date, article_title, hn_url}
+
+    if not data_base.exists():
+        print("No data directory found.")
+        return
+
+    for date_dir in sorted(data_base.iterdir()):
+        if not date_dir.is_dir():
+            continue
+
+        frontpage_file = date_dir / "frontpage.json"
+        all_grades_file = date_dir / "all_grades.json"
+
+        if not all_grades_file.exists():
+            continue
+
+        # Load frontpage for article titles
+        article_info = {}
+        if frontpage_file.exists():
+            with open(frontpage_file) as f:
+                for article in json.load(f):
+                    article_info[article["item_id"]] = {
+                        "title": article["title"],
+                        "hn_url": article["hn_url"]
+                    }
+
+        # Load grades
+        with open(all_grades_file) as f:
+            grades_data = json.load(f)
+
+        target_date = date_dir.name
+        for username, grade_list in grades_data.items():
+            if username not in all_user_grades:
+                all_user_grades[username] = []
+
+            for g in grade_list:
+                article_id = g["article"]
+                info = article_info.get(article_id, {})
+                all_user_grades[username].append({
+                    "grade": g["grade"],
+                    "rationale": g.get("rationale", ""),
+                    "article_id": article_id,
+                    "date": target_date,
+                    "article_title": info.get("title", f"Article {article_id}"),
+                    "hn_url": info.get("hn_url", f"https://news.ycombinator.com/item?id={article_id}")
+                })
+
+    if not all_user_grades:
+        print("No grades found to render.")
+        return
+
+    # Calculate stats for each user
+    user_stats = []
+    for username, grades in all_user_grades.items():
+        gpas = [grade_to_numeric(g["grade"]) for g in grades]
+        avg_gpa = sum(gpas) / len(gpas)
+        user_stats.append({
+            "username": username,
+            "avg_gpa": avg_gpa,
+            "num_grades": len(grades),
+            "grades": grades
+        })
+
+    # Filter to users with at least 2 grades
+    user_stats = [u for u in user_stats if u["num_grades"] >= 2]
+
+    # Sort by average GPA (highest first), then by number of grades
+    user_stats.sort(key=lambda x: (-x["avg_gpa"], -x["num_grades"]))
+
+    # Generate HTML
+    def grade_color(grade: str) -> str:
+        """Return background color for a grade with +/- variations."""
+        # Color mapping: each grade has base, plus, minus variants
+        colors = {
+            'A+': '#15803d',  # dark green
+            'A':  '#22c55e',  # green
+            'A-': '#4ade80',  # light green
+            'A−': '#4ade80',  # light green (unicode minus)
+            'B+': '#1d4ed8',  # dark blue
+            'B':  '#3b82f6',  # blue
+            'B-': '#60a5fa',  # light blue
+            'B−': '#60a5fa',  # light blue (unicode minus)
+            'C+': '#d97706',  # dark amber
+            'C':  '#f59e0b',  # amber
+            'C-': '#fbbf24',  # light amber
+            'C−': '#fbbf24',  # light amber (unicode minus)
+            'D+': '#ea580c',  # dark orange
+            'D':  '#f97316',  # orange
+            'D-': '#fb923c',  # light orange
+            'D−': '#fb923c',  # light orange (unicode minus)
+            'F':  '#ef4444',  # red
+        }
+        return colors.get(grade, '#6b7280')  # gray fallback
+
+    page_html = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Hall of Fame - HN Time Capsule</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               max-width: 1000px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
+        h1 { color: #ff6600; }
+        .intro { color: #666; margin-bottom: 30px; }
+        .back-link { margin-bottom: 20px; }
+        .back-link a { color: #ff6600; text-decoration: none; }
+        .back-link a:hover { text-decoration: underline; }
+
+        .user-card { background: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 20px;
+                    border: 1px solid #e5e7eb; }
+        .user-header { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
+        .user-name { font-size: 1.25em; font-weight: 600; }
+        .user-name a { color: #333; text-decoration: none; }
+        .user-name a:hover { color: #ff6600; }
+        .user-stats { color: #666; font-size: 0.9em; }
+        .avg-gpa { background: #ff6600; color: white; padding: 4px 10px; border-radius: 4px;
+                  font-weight: 600; font-size: 0.9em; }
+
+        .grades-list { display: flex; flex-direction: column; gap: 10px; }
+        .grade-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px;
+                     background: white; border-radius: 6px; border: 1px solid #e5e7eb; }
+        .grade-badge { min-width: 36px; height: 36px; display: flex; align-items: center;
+                      justify-content: center; border-radius: 6px; color: white;
+                      font-weight: 700; font-size: 0.85em; }
+        .grade-content { flex: 1; }
+        .grade-article { font-weight: 500; margin-bottom: 4px; }
+        .grade-article a { color: #333; text-decoration: none; }
+        .grade-article a:hover { color: #ff6600; }
+        .grade-rationale { color: #666; font-size: 0.9em; font-style: italic; }
+        .grade-meta { font-size: 0.8em; color: #999; margin-top: 4px; }
+        .grade-meta a { color: #ff6600; text-decoration: none; }
+        .grade-meta a:hover { text-decoration: underline; }
+
+        .rank { font-size: 1.5em; font-weight: 700; color: #d1d5db; min-width: 40px; }
+        .rank.gold { color: #fbbf24; }
+        .rank.silver { color: #9ca3af; }
+        .rank.bronze { color: #d97706; }
+    </style>
+</head>
+<body>
+    <div class="back-link"><a href="index.html">&larr; Back to dates</a></div>
+    <h1>Hall of Fame</h1>
+    <p class="intro">
+        The most prescient Hacker News commenters, ranked by their average grade across all analyzed threads.
+        Grades are assigned by an LLM evaluating how well each comment predicted the future with 10 years of hindsight.
+    </p>
+"""
+
+    for i, user in enumerate(user_stats):
+        rank = i + 1
+        rank_class = ""
+        if rank == 1:
+            rank_class = "gold"
+        elif rank == 2:
+            rank_class = "silver"
+        elif rank == 3:
+            rank_class = "bronze"
+
+        # Format GPA as letter grade equivalent
+        gpa = user["avg_gpa"]
+        if gpa >= 3.85:
+            gpa_letter = "A"
+        elif gpa >= 3.5:
+            gpa_letter = "A-"
+        elif gpa >= 3.15:
+            gpa_letter = "B+"
+        elif gpa >= 2.85:
+            gpa_letter = "B"
+        elif gpa >= 2.5:
+            gpa_letter = "B-"
+        elif gpa >= 2.15:
+            gpa_letter = "C+"
+        elif gpa >= 1.85:
+            gpa_letter = "C"
+        elif gpa >= 1.5:
+            gpa_letter = "C-"
+        elif gpa >= 1.15:
+            gpa_letter = "D+"
+        elif gpa >= 0.85:
+            gpa_letter = "D"
+        else:
+            gpa_letter = "F"
+
+        hn_user_url = f"https://news.ycombinator.com/user?id={html.escape(user['username'])}"
+
+        page_html += f"""
+    <div class="user-card">
+        <div class="user-header">
+            <div class="rank {rank_class}">#{rank}</div>
+            <div class="user-name"><a href="{hn_user_url}" target="_blank">{html.escape(user['username'])}</a></div>
+            <div class="avg-gpa">{gpa_letter} ({gpa:.2f})</div>
+            <div class="user-stats">{user['num_grades']} grade{"s" if user['num_grades'] > 1 else ""}</div>
+        </div>
+        <div class="grades-list">
+"""
+
+        # Sort grades by grade (best first)
+        sorted_grades = sorted(user["grades"], key=lambda g: -grade_to_numeric(g["grade"]))
+
+        for g in sorted_grades:
+            color = grade_color(g["grade"])
+            rationale_part = f'<div class="grade-rationale">"{html.escape(g["rationale"])}"</div>' if g["rationale"] else ""
+            analysis_url = f"{g['date']}/index.html#article-{g['article_id']}"
+
+            page_html += f"""            <div class="grade-item">
+                <div class="grade-badge" style="background: {color}">{g['grade']}</div>
+                <div class="grade-content">
+                    <div class="grade-article"><a href="{analysis_url}">{html.escape(g['article_title'])}</a></div>
+                    {rationale_part}
+                    <div class="grade-meta">
+                        <a href="{analysis_url}">View analysis</a> &middot;
+                        <a href="{g['hn_url']}" target="_blank">HN thread</a> &middot; {g['date']}
+                    </div>
+                </div>
+            </div>
+"""
+
+        page_html += """        </div>
+    </div>
+"""
+
+    page_html += """</body>
+</html>"""
+
+    output_file = output_base / "hall-of-fame.html"
+    with open(output_file, 'w') as f:
+        f.write(page_html)
+
+    print(f"Rendered Hall of Fame to {output_file} ({len(user_stats)} users)")
 
 
 # -----------------------------------------------------------------------------
