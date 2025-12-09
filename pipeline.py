@@ -561,8 +561,9 @@ def stage_prompt(target_date: str):
     print(f"\nPrompts generated in {data_dir}")
 
 
-def stage_analyze(target_date: str, model: str = "gpt-5.1"):
+def stage_analyze(target_date: str, model: str = "gpt-5.1", max_workers: int = 5):
     """Stage 3: Run LLM analysis on all prompts."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from dotenv import load_dotenv
     from openai import OpenAI
 
@@ -570,6 +571,8 @@ def stage_analyze(target_date: str, model: str = "gpt-5.1"):
     client = OpenAI()
     data_dir = get_data_dir(target_date)
 
+    # Collect articles to analyze
+    to_analyze = []
     for article_dir in sorted(data_dir.iterdir()):
         if not article_dir.is_dir():
             continue
@@ -580,14 +583,21 @@ def stage_analyze(target_date: str, model: str = "gpt-5.1"):
         if not prompt_file.exists() or response_file.exists():
             continue
 
-        prompt = prompt_file.read_text()
-
         meta_file = article_dir / "meta.json"
         with open(meta_file) as f:
             article = Article(**json.load(f))
 
-        print(f"Analyzing {article.item_id}: {article.title[:50]}...")
+        to_analyze.append((article_dir, article, prompt_file.read_text()))
 
+    if not to_analyze:
+        print("No articles to analyze.")
+        return
+
+    print(f"Analyzing {len(to_analyze)} articles with {max_workers} workers...")
+
+    def analyze_one(item):
+        article_dir, article, prompt = item
+        response_file = article_dir / "response.md"
         try:
             response = client.responses.create(
                 model=model,
@@ -598,11 +608,18 @@ def stage_analyze(target_date: str, model: str = "gpt-5.1"):
             result = response.output_text
             with open(response_file, 'w') as f:
                 f.write(result)
-            print(f"  Done ({len(result)} chars)")
+            return (article.item_id, article.title[:50], len(result), None)
         except Exception as e:
-            print(f"  Error: {e}")
+            return (article.item_id, article.title[:50], 0, str(e))
 
-        time.sleep(1)  # Rate limiting
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(analyze_one, item): item for item in to_analyze}
+        for future in as_completed(futures):
+            item_id, title, chars, error = future.result()
+            if error:
+                print(f"  {item_id}: {title}... Error: {error}")
+            else:
+                print(f"  {item_id}: {title}... Done ({chars} chars)")
 
     print(f"\nAnalysis complete. Results in {data_dir}")
 
@@ -895,6 +912,7 @@ def main():
     parser.add_argument("--date", default=None, help="Target date (YYYY-MM-DD), defaults to 10 years ago")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of articles (for testing)")
     parser.add_argument("--model", default="gpt-5.1", help="OpenAI model for analysis")
+    parser.add_argument("--workers", type=int, default=5, help="Number of parallel workers for analysis")
 
     args = parser.parse_args()
 
@@ -911,7 +929,7 @@ def main():
     if args.stage == "prompt" or args.stage == "all":
         stage_prompt(target_date)
     if args.stage == "analyze" or args.stage == "all":
-        stage_analyze(target_date, args.model)
+        stage_analyze(target_date, args.model, args.workers)
     if args.stage == "parse" or args.stage == "all":
         stage_parse(target_date)
     if args.stage == "render" or args.stage == "all":

@@ -69,7 +69,6 @@ data/
 
 - `pipeline.py` - Main pipeline with all stages (fetch, prompt, analyze, parse, render)
 - `parse_grades.py` - Standalone grade parser for testing
-- `main.py` - Original single-file prototype (deprecated, use pipeline.py)
 - `prompt.txt` - The prompt template used for LLM analysis
 
 ## Example Output
