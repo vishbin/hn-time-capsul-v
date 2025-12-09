@@ -680,6 +680,88 @@ def stage_parse(target_date: str):
             print(f"  {username}: {gpa:.2f} ({count} articles)")
 
 
+def stage_clean(target_date: str, stage: str | None = None, article_id: str | None = None):
+    """Clean cached data for a date, optionally filtered by stage or article."""
+    data_dir = get_data_dir(target_date)
+
+    if not data_dir.exists():
+        print(f"No data directory for {target_date}")
+        return
+
+    # Define what files each stage produces
+    stage_files = {
+        "fetch": ["meta.json", "article.txt", "article_error.txt", "comments.json"],
+        "prompt": ["prompt.md"],
+        "analyze": ["response.md"],
+        "parse": ["grades.json", "score.json"],
+    }
+
+    # Stages and their downstream dependencies
+    stage_order = ["fetch", "prompt", "analyze", "parse", "render"]
+
+    # Determine which stages to clean
+    if stage:
+        if stage not in stage_order:
+            print(f"Unknown stage: {stage}")
+            return
+        # Clean this stage and all downstream stages
+        stage_idx = stage_order.index(stage)
+        stages_to_clean = stage_order[stage_idx:-1]  # exclude render (it's just summary.html)
+    else:
+        stages_to_clean = stage_order[:-1]  # all except render
+
+    files_to_delete = set()
+    for s in stages_to_clean:
+        files_to_delete.update(stage_files.get(s, []))
+
+    # Get article directories to clean
+    if article_id:
+        article_dirs = [data_dir / article_id]
+        if not article_dirs[0].exists():
+            print(f"Article {article_id} not found")
+            return
+    else:
+        article_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
+
+    # Clean files
+    deleted_count = 0
+    for article_dir in article_dirs:
+        for filename in files_to_delete:
+            filepath = article_dir / filename
+            if filepath.exists():
+                filepath.unlink()
+                deleted_count += 1
+
+        # If cleaning fetch, remove the entire article directory if empty
+        if "fetch" in stages_to_clean:
+            if article_dir.exists() and not any(article_dir.iterdir()):
+                article_dir.rmdir()
+
+    # Clean top-level files
+    if not article_id:
+        if "fetch" in stages_to_clean:
+            frontpage = data_dir / "frontpage.json"
+            if frontpage.exists():
+                frontpage.unlink()
+                deleted_count += 1
+
+        if "parse" in stages_to_clean:
+            all_grades = data_dir / "all_grades.json"
+            if all_grades.exists():
+                all_grades.unlink()
+                deleted_count += 1
+
+        # Always clean summary.html if cleaning any stage
+        summary = data_dir / "summary.html"
+        if summary.exists():
+            summary.unlink()
+            deleted_count += 1
+
+    stage_desc = f"stage '{stage}' and downstream" if stage else "all stages"
+    article_desc = f" for article {article_id}" if article_id else ""
+    print(f"Cleaned {stage_desc}{article_desc}: {deleted_count} files deleted")
+
+
 def stage_render(target_date: str):
     """Stage 5: Render HTML summary."""
     data_dir = get_data_dir(target_date)
@@ -907,12 +989,15 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="HN Time Capsule Pipeline")
-    parser.add_argument("stage", choices=["fetch", "prompt", "analyze", "parse", "render", "all"],
+    parser.add_argument("stage", choices=["fetch", "prompt", "analyze", "parse", "render", "all", "clean"],
                         help="Pipeline stage to run")
     parser.add_argument("--date", default=None, help="Target date (YYYY-MM-DD), defaults to 10 years ago")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of articles (for testing)")
     parser.add_argument("--model", default="gpt-5.1", help="OpenAI model for analysis")
     parser.add_argument("--workers", type=int, default=5, help="Number of parallel workers for analysis")
+    parser.add_argument("--clean-stage", choices=["fetch", "prompt", "analyze", "parse"],
+                        help="For clean: only clean this stage and downstream (default: all)")
+    parser.add_argument("--article", help="For clean: only clean specific article by item_id")
 
     args = parser.parse_args()
 
@@ -924,7 +1009,9 @@ def main():
 
     print(f"Target date: {target_date}\n")
 
-    if args.stage == "fetch" or args.stage == "all":
+    if args.stage == "clean":
+        stage_clean(target_date, args.clean_stage, args.article)
+    elif args.stage == "fetch" or args.stage == "all":
         stage_fetch(target_date, args.limit)
     if args.stage == "prompt" or args.stage == "all":
         stage_prompt(target_date)
