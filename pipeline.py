@@ -198,7 +198,7 @@ class ArticleTextParser(HTMLParser):
 # Fetching functions
 # -----------------------------------------------------------------------------
 
-def fetch_url(url: str, retries: int = 3, timeout: int = 15) -> str:
+def fetch_url(url: str, retries: int = 5, timeout: int = 15) -> str:
     """Fetch URL content with retry logic. Uses requests library to avoid TLS fingerprint blocking."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -208,12 +208,15 @@ def fetch_url(url: str, retries: int = 3, timeout: int = 15) -> str:
     for attempt in range(retries):
         try:
             if attempt > 0:
-                time.sleep(2 ** attempt)
+                wait_time = 2 ** attempt  # 2, 4, 8, 16 seconds
+                print(f"  Retry {attempt}/{retries-1} after {wait_time}s...")
+                time.sleep(wait_time)
             response = requests.get(url, headers=headers, timeout=timeout)
             response.raise_for_status()
             return response.text
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 403 and attempt < retries - 1:
+                print(f"  Got 403, will retry...")
                 continue
             raise
     raise Exception(f"Failed to fetch {url} after {retries} retries")
@@ -1463,7 +1466,7 @@ def main():
     parser.add_argument("--date", default=None, help="Target date (YYYY-MM-DD), defaults to 10 years ago")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of articles (for testing)")
     parser.add_argument("--model", default="gpt-5.1", help="OpenAI model for analysis")
-    parser.add_argument("--workers", type=int, default=5, help="Number of parallel workers for analysis")
+    parser.add_argument("--workers", type=int, default=15, help="Number of parallel workers for analysis")
     parser.add_argument("--clean-stage", choices=["fetch", "prompt", "analyze", "parse"],
                         help="For clean: only clean this stage and downstream (default: all)")
     parser.add_argument("--article", help="For clean: only clean specific article by item_id")
