@@ -1169,7 +1169,7 @@ def stage_render_index():
                             background: linear-gradient(135deg, #fbbf24, #f59e0b); color: white;
                             text-decoration: none; border-radius: 8px; font-weight: 600;
                             transition: transform 0.15s, box-shadow 0.15s; }
-        .hall-of-fame-link:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(251, 191, 36, 0.4); }
+        .hall-of-fame-link:hover { box-shadow: 0 4px 12px rgba(251, 191, 36, 0.4); }
         h2 { color: #333; margin-top: 40px; margin-bottom: 20px; font-size: 1.2em; }
         .date-list { list-style: none; padding: 0; }
         .date-list li { margin-bottom: 10px; }
@@ -1184,9 +1184,10 @@ def stage_render_index():
 <body>
     <h1>HN Time Capsule</h1>
     <p class="intro">
-        Revisiting Hacker News frontpages from 10 years ago, with the benefit of hindsight.
-        Each day's articles are analyzed by an LLM to see what predictions came true and which commenters were most prescient.
+        LLMs revisit Hacker News frontpages from 10 years ago (December 2015), with the benefit of hindsight.
+        Each day's articles and comments are analyzed by ChatGPT 5.1 (with thinking + browser tool) to compare what was said to what actually happened and users are graded on how prescient they were in retrospect. 30 articles per front page and 31 of them => 930 GPT 5.1 Thinking calls led to total cost of ~$60.
     </p>
+    <h2>Browse by User</h2>
     <a href="hall-of-fame.html" class="hall-of-fame-link">Hall of Fame</a>
     <h2>Browse by Date</h2>
     <ul class="date-list">
@@ -1286,8 +1287,8 @@ def stage_render_hall_of_fame():
             "grades": grades
         })
 
-    # Filter to users with at least 2 grades
-    user_stats = [u for u in user_stats if u["num_grades"] >= 2]
+    # Filter to users with at least 3 grades
+    user_stats = [u for u in user_stats if u["num_grades"] >= 3]
 
     # Bayesian weighted rating (IMDB formula)
     # weighted = (v * R + m * C) / (v + m)
@@ -1334,50 +1335,41 @@ def stage_render_hall_of_fame():
     <meta charset="utf-8">
     <title>Hall of Fame - HN Time Capsule</title>
     <style>
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-               max-width: 1000px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
-        h1 { color: #ff6600; }
-        .intro { color: #666; margin-bottom: 30px; }
-        .back-link { margin-bottom: 20px; }
-        .back-link a { color: #ff6600; text-decoration: none; }
-        .back-link a:hover { text-decoration: underline; }
-
-        .user-card { background: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 20px;
-                    border: 1px solid #e5e7eb; }
-        .user-header { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
-        .user-name { font-size: 1.25em; font-weight: 600; }
-        .user-name a { color: #333; text-decoration: none; }
-        .user-name a:hover { color: #ff6600; }
-        .user-stats { color: #666; font-size: 0.9em; }
-        .avg-gpa { background: #ff6600; color: white; padding: 4px 10px; border-radius: 4px;
-                  font-weight: 600; font-size: 0.9em; }
-
-        .grades-list { display: flex; flex-direction: column; gap: 10px; }
-        .grade-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px;
-                     background: white; border-radius: 6px; border: 1px solid #e5e7eb; }
-        .grade-badge { min-width: 36px; height: 36px; display: flex; align-items: center;
-                      justify-content: center; border-radius: 6px; color: white;
-                      font-weight: 700; font-size: 0.85em; }
-        .grade-content { flex: 1; }
-        .grade-article { font-weight: 500; margin-bottom: 4px; }
-        .grade-article a { color: #333; text-decoration: none; }
-        .grade-article a:hover { color: #ff6600; }
-        .grade-rationale { color: #666; font-size: 0.9em; font-style: italic; }
-        .grade-meta { font-size: 0.8em; color: #999; margin-top: 4px; }
-        .grade-meta a { color: #ff6600; text-decoration: none; }
-        .grade-meta a:hover { text-decoration: underline; }
-
-        .rank { font-size: 1.5em; font-weight: 700; color: #d1d5db; min-width: 40px; }
-        .rank.gold { color: #fbbf24; }
-        .rank.silver { color: #9ca3af; }
-        .rank.bronze { color: #d97706; }
+        *{box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:1000px;margin:0 auto;padding:40px 20px;line-height:1.6}
+        h1{color:#ff6600}
+        .i{color:#666;margin-bottom:30px}
+        .b{margin-bottom:20px}
+        .b a{color:#ff6600;text-decoration:none}
+        .b a:hover{text-decoration:underline}
+        .uc{background:#f9fafb;border-radius:8px;padding:20px;margin-bottom:20px;border:1px solid #e5e7eb}
+        .uh{display:flex;align-items:center;gap:15px;margin-bottom:15px}
+        .un{font-size:1.25em;font-weight:600}
+        .un a{color:#333;text-decoration:none}
+        .un a:hover{color:#ff6600}
+        .us{color:#666;font-size:0.9em}
+        .ag{background:#ff6600;color:white;padding:4px 10px;border-radius:4px;font-weight:600;font-size:0.9em}
+        .gl{display:flex;flex-direction:column;gap:10px}
+        .gi{display:flex;align-items:flex-start;gap:12px;padding:10px;background:white;border-radius:6px;border:1px solid #e5e7eb}
+        .gb{min-width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:white;font-weight:700;font-size:0.85em}
+        .gc{flex:1}
+        .ga{font-weight:500;margin-bottom:4px}
+        .ga a{color:#333;text-decoration:none}
+        .ga a:hover{color:#ff6600}
+        .gr{color:#666;font-size:0.9em;font-style:italic}
+        .gm{font-size:0.8em;color:#999;margin-top:4px}
+        .gm a{color:#ff6600;text-decoration:none}
+        .gm a:hover{text-decoration:underline}
+        .rk{font-size:1.5em;font-weight:700;color:#d1d5db;min-width:40px}
+        .rk.g{color:#fbbf24}
+        .rk.s{color:#9ca3af}
+        .rk.z{color:#d97706}
     </style>
 </head>
 <body>
-    <div class="back-link"><a href="index.html">&larr; Back to dates</a></div>
+    <div class="b"><a href="index.html">&larr; Back to dates</a></div>
     <h1>Hall of Fame</h1>
-    <p class="intro">
+    <p class="i">
         The most prescient Hacker News commenters, ranked by their average grade across all analyzed threads.
         Grades are assigned by an LLM evaluating how well each comment predicted the future with 10 years of hindsight.
     </p>
@@ -1387,11 +1379,11 @@ def stage_render_hall_of_fame():
         rank = i + 1
         rank_class = ""
         if rank == 1:
-            rank_class = "gold"
+            rank_class = "g"
         elif rank == 2:
-            rank_class = "silver"
+            rank_class = "s"
         elif rank == 3:
-            rank_class = "bronze"
+            rank_class = "z"
 
         # Format GPA as letter grade equivalent (use weighted GPA for ranking/display)
         gpa = user["weighted_gpa"]
@@ -1420,40 +1412,19 @@ def stage_render_hall_of_fame():
 
         hn_user_url = f"https://news.ycombinator.com/user?id={html.escape(user['username'])}"
 
-        page_html += f"""
-    <div class="user-card">
-        <div class="user-header">
-            <div class="rank {rank_class}">#{rank}</div>
-            <div class="user-name"><a href="{hn_user_url}" target="_blank">{html.escape(user['username'])}</a></div>
-            <div class="avg-gpa">{gpa_letter} ({gpa:.2f})</div>
-            <div class="user-stats">{user['num_grades']} grade{"s" if user['num_grades'] > 1 else ""}</div>
-        </div>
-        <div class="grades-list">
-"""
+        page_html += f"""<div class="uc"><div class="uh"><div class="rk {rank_class}">#{rank}</div><div class="un"><a href="{hn_user_url}" target="_blank">{html.escape(user['username'])}</a></div><div class="ag">{gpa_letter} ({gpa:.2f})</div><div class="us">{user['num_grades']} grade{"s" if user['num_grades'] > 1 else ""}</div></div><div class="gl">"""
 
         # Sort grades by grade (best first)
         sorted_grades = sorted(user["grades"], key=lambda g: -grade_to_numeric(g["grade"]))
 
         for g in sorted_grades:
             color = grade_color(g["grade"])
-            rationale_part = f'<div class="grade-rationale">"{html.escape(g["rationale"])}"</div>' if g["rationale"] else ""
+            rationale_part = f'<div class="gr">"{html.escape(g["rationale"])}"</div>' if g["rationale"] else ""
             analysis_url = f"{g['date']}/index.html#article-{g['article_id']}"
 
-            page_html += f"""            <div class="grade-item">
-                <div class="grade-badge" style="background: {color}">{g['grade']}</div>
-                <div class="grade-content">
-                    <div class="grade-article"><a href="{analysis_url}">{html.escape(g['article_title'])}</a></div>
-                    {rationale_part}
-                    <div class="grade-meta">
-                        <a href="{analysis_url}">View analysis</a> &middot;
-                        <a href="{g['hn_url']}" target="_blank">HN thread</a> &middot; {g['date']}
-                    </div>
-                </div>
-            </div>
-"""
+            page_html += f"""<div class="gi"><div class="gb" style="background:{color}">{g['grade']}</div><div class="gc"><div class="ga"><a href="{analysis_url}">{html.escape(g['article_title'])}</a></div>{rationale_part}<div class="gm"><a href="{analysis_url}">View</a> &middot; <a href="{g['hn_url']}" target="_blank">HN</a> &middot; {g['date']}</div></div></div>"""
 
-        page_html += """        </div>
-    </div>
+        page_html += """</div></div>
 """
 
     page_html += """</body>
