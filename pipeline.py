@@ -1274,8 +1274,10 @@ def stage_render_hall_of_fame():
 
     # Calculate stats for each user
     user_stats = []
+    all_gpas = []  # Collect all GPAs for global mean
     for username, grades in all_user_grades.items():
         gpas = [grade_to_numeric(g["grade"]) for g in grades]
+        all_gpas.extend(gpas)
         avg_gpa = sum(gpas) / len(gpas)
         user_stats.append({
             "username": username,
@@ -1287,8 +1289,19 @@ def stage_render_hall_of_fame():
     # Filter to users with at least 2 grades
     user_stats = [u for u in user_stats if u["num_grades"] >= 2]
 
-    # Sort by average GPA (highest first), then by number of grades
-    user_stats.sort(key=lambda x: (-x["avg_gpa"], -x["num_grades"]))
+    # Bayesian weighted rating (IMDB formula)
+    # weighted = (v * R + m * C) / (v + m)
+    # v = number of votes, R = user's average, m = prior weight, C = global mean
+    global_mean = sum(all_gpas) / len(all_gpas) if all_gpas else 3.0
+    m = 3  # Prior weight - effectively adds 3 "average" votes to each user
+
+    for u in user_stats:
+        v = u["num_grades"]
+        R = u["avg_gpa"]
+        u["weighted_gpa"] = (v * R + m * global_mean) / (v + m)
+
+    # Sort by weighted GPA (highest first)
+    user_stats.sort(key=lambda x: -x["weighted_gpa"])
 
     # Generate HTML
     def grade_color(grade: str) -> str:
@@ -1380,8 +1393,8 @@ def stage_render_hall_of_fame():
         elif rank == 3:
             rank_class = "bronze"
 
-        # Format GPA as letter grade equivalent
-        gpa = user["avg_gpa"]
+        # Format GPA as letter grade equivalent (use weighted GPA for ranking/display)
+        gpa = user["weighted_gpa"]
         if gpa >= 3.85:
             gpa_letter = "A"
         elif gpa >= 3.5:
